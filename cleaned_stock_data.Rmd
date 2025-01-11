@@ -1,0 +1,42 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(dplyr)
+stock_data <- read.csv("C:/Users/rober/Downloads/combined_nasdaq_yf_data_2023.csv")
+head(stock_data$Date)
+```
+
+```{r}
+# Convert to Date format
+stock_data$Date <- as.Date(stock_data$Date, format = "%m/%d/%Y")
+
+# Format the date as MM/DD/YYYY
+stock_data$Date <- format(stock_data$Date, "%m/%d/%Y")
+
+# Check the first few rows
+head(stock_data$Date)
+
+```
+
+```{r}
+cleaned_stock_data <- stock_data %>%
+  group_by(Date, Name, Sector, Ticker) %>%  # Grouping by Date, Name, Sector, and Ticker
+  summarize(
+    Open = mean(Open, na.rm = TRUE),
+    High = mean(High, na.rm = TRUE),
+    Low = mean(Low, na.rm = TRUE),
+    Close = mean(Close, na.rm = TRUE),
+    Volume = mean(Volume, na.rm = TRUE),
+    .groups = 'drop'  # Ungroup the data after summarization
+  )
+
+# View the cleaned data
+head(cleaned_stock_data)
+
+write.csv(cleaned_stock_data, "cleaned_stock_data.csv", row.names = FALSE)
+
+```
+
+

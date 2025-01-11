@@ -1,0 +1,156 @@
+---
+title: "Reddit API Scrape"
+author: "Samaa Nadkarni"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r seed}
+set.seed(41)
+```
+
+```{r libraries}
+library(data.table)
+library(DT)
+library(httr)
+library(jsonlite)
+```
+
+```{r constants}
+reddit_client_id <- "09lsjWc4jWS__t2I4NF2dg"
+reddit_client_secret <- "zTLykT34zu7F_C48lZOxR3pVxy3sVA"
+reddit_user_agent <- "social_media_analysis/0.1 by Helpful_Address_9503"
+subreddits <- c("investing", "Investors", "trading", "stockmarket", "stocks", 
+                "forex", "investoradvice", "stocktrader", "finance", "forextrading", "wallstreetbets")
+```
+
+```{r functions}
+#Function to authenticate with Reddit and get an access token
+reddit_auth <- function(client_id, client_secret, user_agent) {
+  auth_response <- POST(
+    url = "https://www.reddit.com/api/v1/access_token",
+    authenticate(client_id, client_secret),
+    body = list(grant_type = "client_credentials"),
+    encode = "form",
+    user_agent(user_agent)
+  )
+  
+  if (status_code(auth_response) != 200) {
+    stop("Failed to authenticate with Reddit API.")
+  }
+  
+  token <- content(auth_response)$access_token
+  return(token)
+}
+
+#Function to collect posts from a subreddit
+collect_subreddit_posts <- function(subreddit, token, limit = 100) {
+  url <- paste0("https://oauth.reddit.com/r/", subreddit, "/top.json")
+  
+  response <- GET(
+    url = url,
+    add_headers(Authorization = paste("Bearer", token)),
+    query = list(limit = limit, t = "all")  
+  )
+  
+  if (status_code(response) != 200) {
+    print(content(response, as = "text"))
+    stop("Failed to fetch subreddit posts.")
+  }
+  
+  #Parse the JSON response
+  posts_data <- content(response, as = "parsed", type = "application/json")
+  if (length(posts_data$data$children) == 0) {
+    stop("No posts found in the subreddit.")
+  }
+  
+  #Extract relevant fields 
+  posts <- rbindlist(
+    lapply(posts_data$data$children, function(post) {
+      post_data <- post$data
+      list(
+        platform = "Reddit",
+        post_id = post_data$id,
+        title = post_data$title,
+        user_id = ifelse(!is.null(post_data$author), post_data$author, NA),
+        post_content = ifelse(!is.null(post_data$selftext), post_data$selftext, post_data$title),
+        created_at = as.POSIXct(post_data$created_utc, origin = "1970-01-01", tz = "UTC"),
+        upvotes = post_data$score,
+        num_comments = post_data$num_comments,
+        flair = ifelse(!is.null(post_data$link_flair_text), post_data$link_flair_text, NA),
+        is_nsfw = post_data$over_18,
+        url = post_data$url,
+        subreddit = subreddit 
+      )
+    }),
+    fill = TRUE
+  )
+  
+  return(posts)
+}
+
+```
+
+```{r explore_data, eval = FALSE}
+
+```
+
+
+```{r clean_data}
+
+```
+
+#### Reddit API Scrape
+
+Reddit's API provides programmatic access to its platform enabling developers to retrieve data such as posts, comments and user activity from specific subreddits or threads. The API offers endpoints for fetching data like trending posts, search results and metadata, with built-in rate limits to ensure compliance. For this project, we utilised Reddit's API to focus on subreddits related to stock market discussions, extracting top posts and their associated metadata. By querying Reddit's vast repository of user-generated content we gained insights into market trends, company performance and sector-specific discussions in areas like energy, healthcare, and technology.
+
+```{r}
+#Authenticate with Reddit API
+reddit_token <- reddit_auth(reddit_client_id, reddit_client_secret, reddit_user_agent)
+
+```
+
+```{r}
+reddit_data <- data.table()
+
+for (subreddit_name in subreddits) {
+  message(paste("Scraping subreddit:", subreddit_name))
+  subreddit_posts <- tryCatch(
+    collect_subreddit_posts(subreddit_name, reddit_token, limit = 100),
+    error = function(e) {
+      message(paste("Error scraping subreddit:", subreddit_name, "-", e$message))
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(subreddit_posts)) {
+    reddit_data <- rbindlist(list(reddit_data, subreddit_posts), fill = TRUE)
+    message(paste("Data from", subreddit_name, "appended to the final dataframe."))
+  }
+  
+  Sys.sleep(10)  
+}
+
+```
+
+```{r}
+fwrite(reddit_data, "reddit_subreddit_posts.csv")
+message("All subreddit data has been saved to reddit_subreddit_posts.csv.")
+
+```
+
+```{r}
+
+datatable(reddit_data, options = list(pageLength = 10, autoWidth = TRUE))
+
+```
+
+
+
+
+
+
+

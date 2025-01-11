@@ -1,0 +1,178 @@
+---
+title: "LSTM"
+output: html_document
+date: "2024-12-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setenv("CUDA_VISIBLE_DEVICES" = "-1")
+```
+
+Load libraries
+```{r}
+library(data.table)
+library(keras)
+library(tensorflow)
+```
+
+Load Data
+```{r}
+stock_data <- fread("D:/Capstone Final Project/Capstone Final Project/Data/combined_nasdaq_yf_data_2023.csv")
+afinn_score <- fread("D:/Capstone Final Project/Capstone Final Project/Data/ny_afinn.csv")
+```
+Important!!!!!!!!!!!!!!
+Select the tickter here:
+```{r}
+selected_ticker <- "A"
+```
+
+Constants:
+```{r}
+# Define sequence length
+seq_length <- 30
+```
+
+Functions:
+```{r}
+# Functions of creating sequences for LSTM
+create_sequences <- function(data, seq_length) {
+  X <- list()
+  y <- list()
+  for (i in seq(seq_length, nrow(data) - 1)) {
+    X[[i - seq_length + 1]] <- as.matrix(data[(i - seq_length + 1):i, .(Close, Volume, afinn_score)])
+    y[[i - seq_length + 1]] <- data[i + 1, Close]
+  }
+  list(X = array(unlist(X), dim = c(length(X), seq_length, ncol(data))),
+       y = array(unlist(y), dim = c(length(y), 1)))
+}
+```
+
+Process and merge Datasets
+```{r}
+# Load the AFINN sentiment data
+afinn <- fread("D:/Capstone Final Project/Capstone Final Project/Data/ny_afinn.csv")
+setnames(afinn, "sentiment_score", "afinn_score")
+afinn[, published_date := as.Date(published_date, format = "%Y-%m-%dT%H:%M:%S%z")]
+
+# Ensure date consistency in the stock dataset
+stock_data[, Date := as.Date(Date, format = "%Y-%m-%d")]
+
+# Merge the datasets on Date
+merged_data <- merge(stock_data, afinn, by.x = "Date", by.y = "published_date", all.x = TRUE)
+merged_data[is.na(afinn_score), afinn_score := 0]
+
+```
+
+Prepare the data
+```{r}
+ticker_data <- merged_data[Ticker == selected_ticker]
+# Ensure the data is sorted by Date
+ticker_data <- ticker_data[order(Date)]
+
+# Select relevant columns for modeling (e.g., 'Date', 'Close', 'Volume', 'afinn_score')
+model_data <- ticker_data[, .(Date, Close, Volume, afinn_score)]
+
+# Scale the data (excluding the Date column)
+scaled_data <- copy(model_data)
+scaled_data[, c("Close", "Volume", "afinn_score") := lapply(.SD, scale), .SDcols = c("Close", "Volume", "afinn_score")]
+```
+
+
+Spliting data
+```{r}
+# Split data into training and testing sets
+train_size <- floor(0.8 * nrow(scaled_data))
+train_data <- scaled_data[1:train_size, .(Close, Volume, afinn_score)]
+test_data <- scaled_data[(train_size + 1):nrow(scaled_data), .(Close, Volume, afinn_score)]
+
+# Create sequences for training and testing
+train_sequences <- create_sequences(train_data, seq_length)
+test_sequences <- create_sequences(test_data, seq_length)
+```
+
+
+Build the model
+```{r}
+# Build the LSTM model
+model <- keras_model_sequential() %>%
+  layer_lstm(units = 100, input_shape = c(seq_length, ncol(train_data)), return_sequences = TRUE) %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_lstm(units = 50, return_sequences = FALSE) %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 1)
+
+# Compile the model
+optimizer <- optimizer_adam(learning_rate = 0.001)  # Lower the learning rate
+model %>% compile(
+  optimizer = optimizer,
+  loss = "mean_squared_error"
+)
+
+# Train the model
+history <- model %>% fit(
+  x = train_sequences$X,
+  y = train_sequences$y,
+  epochs = 50,
+  batch_size = 16,
+  validation_split = 0.2
+)
+```
+```{r}
+summary(model)
+
+```
+
+Make Predictions and visualize results
+```{r}
+predictions <- model %>% predict(test_sequences$X)
+
+# Rescale predictions to match the original scale of `Close`
+original_close_mean <- attr(scaled_data$Close, "scaled:center")
+original_close_sd <- attr(scaled_data$Close, "scaled:scale")
+
+rescaled_predictions <- predictions * original_close_sd + original_close_mean
+rescaled_actual <- test_sequences$y * original_close_sd + original_close_mean
+
+par(mar = c(5, 4, 4, 2))
+adjusted_predictions <- rescaled_predictions
+# Calculate the combined range of actual and predicted values
+range_y <- range(c(rescaled_actual, adjusted_predictions))
+
+plot(
+  seq_along(rescaled_actual),
+  rescaled_actual,
+  type = "l",
+  col = "blue",
+  ylim = range_y,  # Set y-axis limits to include both actual and predicted
+  ylab = "Stock Price",
+  xlab = "Index",
+  main = paste("Actual vs Predicted for", selected_ticker)
+)
+
+# Add predicted values
+lines(
+  seq_along(adjusted_predictions),
+  adjusted_predictions,
+  col = "red"
+)
+
+# Add annotations for the lines
+text(
+  x = length(rescaled_actual) * 0.8,  # Position text near the end of the plot
+  y = rescaled_actual[length(rescaled_actual)],  # Align with actual data
+  labels = "Actual",
+  col = "blue",
+  pos = 4  # Position text to the right
+)
+
+text(
+  x = length(adjusted_predictions) * 0.8,  # Position text near the end of the plot
+  y = rescaled_predictions[length(adjusted_predictions)],  # Align with predictions
+  labels = "Predicted",
+  col = "red",
+  pos = 4  # Position text to the right
+)
+
+```
+

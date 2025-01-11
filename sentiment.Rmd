@@ -1,0 +1,209 @@
+---
+title: "Sentiment Analysis"
+author: "Leqi Han, Samaa Nadkarni"
+date: "2024-11-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Library
+
+```{r cars}
+library(tidyverse)
+library(tidytext)
+library(readxl)
+library(syuzhet)
+library(textdata)
+library(data.table)
+
+```
+
+## Loading Data
+
+
+
+```{r pressure, echo=FALSE}
+setwd(getwd())
+ny_times_data= fread(input = "data/nytimes_articles.csv")
+```
+
+## Clean data
+```{r}
+tokenized_data <- ny_times_data %>%
+ select(headline, abstract, published_date) %>%
+  pivot_longer(cols = c(headline, abstract), names_to = "text_type", values_to = "text") %>%
+  unnest_tokens(word, text)
+data_clean <- tokenized_data %>%
+  anti_join(stop_words, by = "word")
+
+```
+
+## Sentiment Analysis
+
+# bing
+```{r}
+data_sentiment <- data_clean %>%
+  inner_join(get_sentiments("bing"), by = "word") %>%
+  count(published_date, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  mutate(
+    net_sentiment = positive - negative
+  )
+
+```
+# AFINN
+```{r}
+library(tidytext)
+
+data_sentiment_afinn <- data_clean %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(published_date) %>%
+  summarise(sentiment_score = sum(value))
+
+head(data_sentiment_afinn)
+```
+# NRC
+
+```{r}
+# Load NRC sentiment lexicon
+nrc_sentiments <- get_sentiments("nrc")
+
+# Efficient join using data.table
+setDT(data_clean)  # Convert to data.table for efficient operations
+setDT(nrc_sentiments)  # Convert sentiment data to data.table for efficiency
+
+# Join with the NRC lexicon and count sentiments
+data_sentiment_nrc <- data_clean[nrc_sentiments, on = .(word), nomatch = 0]  # Perform efficient join
+data_sentiment_nrc <- data_sentiment_nrc[, .(sentiment_count = .N), by = .(published_date, sentiment)]
+
+# Pivot wider and compute net sentiment
+data_sentiment_nrc_wide <- dcast(data_sentiment_nrc, published_date ~ sentiment, value.var = "sentiment_count", fill = 0)
+data_sentiment_nrc_wide[, net_sentiment := joy - sadness]
+head(data_sentiment_nrc_wide)
+
+```
+
+
+```{r}
+write.csv(data_sentiment_afinn, file = "ny_afinn.csv", row.names = FALSE)
+write.csv(data_sentiment_nrc_wide, file = "ny_nrc.csv", row.names = FALSE)
+
+```
+
+```{r}
+write.csv(data_sentiment, file = "ny_bing.csv", row.names = FALSE)
+```
+
+```{r}
+setwd(getwd())
+reddit_data= fread(input = "data/reddit_subreddit_posts.csv")
+```
+
+```{r}
+afinn_sentiments <- get_sentiments("afinn")
+
+```
+
+```{r}
+reddit_sentiment_scores <- reddit_data %>%
+  mutate(date = as.Date(created_at)) %>% 
+  unnest_tokens(word, post_content) %>% 
+  inner_join(afinn_sentiments, by = "word") %>%    
+  group_by(date) %>%                  
+  summarise(sentiment_score = sum(value), .groups = "drop")
+
+```
+
+```{r}
+head(reddit_sentiment_scores)
+```
+```{r}
+write.csv(reddit_sentiment_scores, file = "reddit_score.csv", row.names = FALSE)
+```
+
+```{r}
+library(ggplot2)
+nytimes_afinn <- fread("ny_afinn.csv")
+reddit_scores <- fread("reddit_score.csv")
+
+#Convert date columns to Date format
+nytimes_afinn$published_date <- as.Date(nytimes_afinn$published_date)
+reddit_scores$date <- as.Date(reddit_scores$date)
+
+#NYTimes Sentiment Distribution
+ggplot(nytimes_afinn, aes(x = sentiment_score)) +
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = "NYTimes Sentiment Score Distribution",
+    x = "Sentiment Score",
+    y = "Frequency"
+  )
+```
+
+```{r}
+#NYTimes Sentiment Over Time
+ggplot(nytimes_afinn, aes(x = published_date, y = sentiment_score)) +
+  geom_line(color = "darkgreen", size = 1) +
+  theme_minimal() +
+  labs(
+    title = "NYTimes Sentiment Score Over Time",
+    x = "Date",
+    y = "Sentiment Score"
+  )
+```
+
+The graph displays the sentiment scores of NYTimes articles over time, highlighting fluctuations in tone across decades.The shifts suggest heightened responsiveness to major economic and geopolitical events, such as post-war recovery, financial crises, or technological booms. In the context of the market and economy, these variations reflect the media's role in documenting public and investor sentiment during periods of economic uncertainty or growth. Positive peaks may correspond to optimistic reporting during bull markets or economic expansion, while negative troughs likely align with recessions, financial crises, or other downturns. For investors, such sentiment trends can influence market psychology, reinforcing optimism during growth phases or exacerbating caution during downturns. 
+
+```{r}
+#Reddit Sentiment Distribution
+ggplot(reddit_scores, aes(x = sentiment_score)) +
+  geom_density(fill = "orange", alpha = 0.6) +
+  theme_minimal() +
+  labs(
+    title = "Reddit Sentiment Score Density",
+    x = "Sentiment Score",
+    y = "Density"
+  )
+
+```
+```{r}
+#Reddit Sentiment Over Time
+ggplot(reddit_scores, aes(x = date, y = sentiment_score)) +
+  geom_point(color = "red", alpha = 0.5) +
+  geom_smooth(method = "loess", color = "blue", se = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Reddit Sentiment Score Over Time",
+    x = "Date",
+    y = "Sentiment Score"
+  )
+```
+
+The graph visualises Reddit sentiment scores over time, highlighting trends in investor sentiment as captured through user-generated content. Post-2020, the data shows increased variability in sentiment, with notable positive outliers indicating spikes in optimistic discussions. This period corresponds with key events such as the COVID-19 pandemic, market volatility and a surge in retail investor participation through platforms like Reddit.
+The upward trend in sentiment scores around 2021 aligns with the "meme stock" phenomenon, where retail investors drove significant market movements in stocks like GameStop and AMC. This reflects how heightened online engagement and collective optimism can influence market behavior. However, the slight decline in average sentiment post-2022 may suggest waning enthusiasm as market conditions became more uncertain, possibly influenced by inflation concerns, interest rate hikes and fears of a recession.
+The broader spread of sentiment scores indicates a mix of optimism and caution among investors, revealing polarised perceptions of market opportunities and risks.
+
+```{r}
+#Comparing Sentiment Scores Between NYTimes and Reddit
+nytimes_afinn$source <- "NYTimes"
+reddit_scores$source <- "Reddit"
+reddit_scores <- reddit_scores %>%
+  rename(published_date = date)  # Rename for consistency
+combined_data <- rbind(nytimes_afinn, reddit_scores)
+
+ggplot(combined_data, aes(x = sentiment_score, fill = source)) +
+  geom_density(alpha = 0.6) +
+  theme_minimal() +
+  labs(
+    title = "Comparison of Sentiment Score Distributions",
+    x = "Sentiment Score",
+    y = "Density"
+  )
+```
+
+The graph illustrates the sentiment score distributions of NYTimes articles and Reddit posts, with a notable peak around neutral scores (approximately 0) and a skew towards positive sentiment. The high neutrality for NYTimes articles is justifiable due to unbiased reporting standards, however the mostly positive skew in Reddit posts, which represents largely unfiltered public opinion indicates a cautiously optimistic investor sentiment. In the context of financial markets, such sentiment suggests a general sense of stability or confidence rather than pessimism or bearish outlooks. This optimism may influence investor behaviour, encouraging participation and potentially driving upward momentum in stock prices. 
+

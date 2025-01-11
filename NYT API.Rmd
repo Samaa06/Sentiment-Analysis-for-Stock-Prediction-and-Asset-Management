@@ -1,0 +1,131 @@
+---
+title: "New York Times API Scrape"
+author: "Samaa Nadkarni"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r seed}
+set.seed(41)
+```
+
+```{r libraries}
+library(data.table)
+library(DT)
+library(httr)
+library(jsonlite)
+library(stringr)
+```
+
+```{r constants}
+api_key <- '0fHWASu6jkbSW4pJt9VF7kLYQz2jeAUf'
+search_queries <- c('fluctuating stock price', 'stock price change', 'stock trade', 'nasdaq', 'stock exchange',
+                    'Stock market sentiment', 'Investor sentiment', 'Market sentiment', 'Stock price outlook',
+                    'Bullish market', 'Energy sector sentiment', 'Oil and gas stock outlook', 'Renewable energy market trends',
+                    'Energy stocks investor confidence', 'Fossil fuel market sentiment', 'Energy sector analysis', 'Alternative energy stock forecasts',
+                    'Energy market volatility', 'Utility stocks sentiment', 'Crude oil price impact on stocks', 'Energy industry investor sentiment',
+                    'Clean energy stock movement', 'Energy sector market psychology', 'Healthcare sector sentiment', 'Pharma stocks investor sentiment',
+                    'Biotechnology stock outlook', 'Healthcare market trends', 'Medical device stocks analysis', 'Healthcare industry forecasts', 'Biotech market volatility',
+                    'Healthcare investor confidence', 'Pharmaceutical market sentiment', 'Healthcare sector stock predictions', 'Healthcare innovation impact on stocks',
+                    'weight loss drug stock', 'miracle drug stock', 'Healthcare market dynamics', 'Tech sector sentiment', 'Technology stocks outlook',
+                    'IT industry market trends', 'Tech stocks investor confidence', 'Software industry analysis', 'Tech industry forecasts', 'Technology market volatility',
+                    'Innovation sector investor sentiment', 'Artificial intelligence stocks sentiment', 'AI stock', 'tech bubble', 
+                    'Apple', 'Microsoft', 'Amazon','Alphabet','Meta','Tesla','NVIDIA','Intel','IBM','Oracle','ORCL',
+                    'ExxonMobil','XOM','Chevron','CVX','BP','Shell','ConocoPhillips','COP','NextEra Energy','Dominion Energy','First Solar','Enphase Energy','Duke Energy',
+                    'Johnson & Johnson','Pfizer','Moderna','Gilead Sciences','Eli Lilly','Merck & Co.','UnitedHealth Group','Anthem','Cigna','CVS Health')
+
+```
+
+```{r functions}
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+```
+
+```{r load_data}
+
+```
+
+```{r explore_data, eval = FALSE}
+
+```
+
+
+```{r clean_data}
+
+```
+
+#### New York Times API Scrape
+
+The New York Times (NYT) API provides developers with programmatic access to the NYT's extensive collection of articles, metadata, and multimedia content. It enables users to search and retrieve articles based on queries, date ranges, and filters such as sections or authors. The API is a powerful tool for building data-driven applications, research projects, or news aggregators using the trusted and authoritative content of the New York Times. For the purpose of this pilot, we have used the free API which allows access to article abstracts but not the full content. We have curated our search queries to capture articles relating to stock fluctuation in the energy, healthcare and technology sector even including names of major companies that experience lots of volatility.
+
+```{r nyt scrape}
+#Initialise an empty data.table to store the articles
+articles_data <- data.table(headline = character(),
+                            abstract = character(),
+                            url = character(),
+                            published_date = character(),
+                            search_query = character())
+
+
+#Iterate through each search query and fetch articles
+for (query in search_queries) {
+  #Encode the query to make it URL safe
+  encoded_query <- URLencode(query, reserved = TRUE)
+  
+  url <- str_glue('https://api.nytimes.com/svc/search/v2/articlesearch.json?q={encoded_query}&api-key={api_key}')
+  
+  #Fetch articles
+  response <- GET(url)
+  
+  if (status_code(response) == 200) {
+    content <- content(response, as = "text", encoding = "UTF-8")
+    parsed_content <- fromJSON(content, simplifyDataFrame = FALSE)
+    
+    if (!is.null(parsed_content$response$docs) && length(parsed_content$response$docs) > 0) {
+      articles <- parsed_content$response$docs
+      
+      #Collect article data
+      query_data <- rbindlist(lapply(articles, function(article) {
+        if (is.list(article)) {
+          data.table(
+            headline = ifelse(is.null(article$headline$main), NA, article$headline$main),
+            abstract = ifelse(is.null(article$abstract), NA, article$abstract),
+            url = ifelse(is.null(article$web_url), NA, article$web_url),
+            published_date = ifelse(is.null(article$pub_date), NA, article$pub_date),
+            search_query = query
+          )
+        } else {
+          NULL
+        }
+      }), fill = TRUE)
+      
+      articles_data <- rbind(articles_data, query_data, fill = TRUE)
+      cat(sprintf("Articles for query '%s' have been fetched.\n", query))
+    } else {
+      cat(sprintf("No articles found for query '%s'.\n", query))
+    }
+  } else {
+    cat(sprintf("Failed to fetch articles for query '%s': %d\n", query, status_code(response)))
+  }
+  
+  #Add delay between requests to avoid rate limiting
+  Sys.sleep(20)
+}
+```
+
+```{r}
+datatable(articles_data)
+
+#Save to a CSV file
+fwrite(articles_data, file = "nytimes_articles.csv")
+cat(sprintf("Data has been saved to %s\n", "nytimes_articles.csv"))
+
+```
+

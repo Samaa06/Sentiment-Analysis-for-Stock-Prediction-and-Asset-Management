@@ -1,0 +1,577 @@
+---
+title: "Stock Dashboard Report"
+output: html_document
+runtime: shiny
+---
+```{r setup, include=FALSE}
+library(shiny)
+library(shinydashboard)
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(plotly)
+library(DT)
+library(prophet)
+
+
+
+# Required packages (install if needed):
+# install.packages(c("shiny", "shinydashboard", "tidyverse", "forecast", "lubridate", "DT", "plotly", "prophet"))
+library(shiny)
+library(shinydashboard)
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(plotly)
+library(DT)
+library(prophet)
+
+#------------------------------------------------------------
+# PREPARE DATA & HELPER FUNCTIONS
+#------------------------------------------------------------
+# Top 20 ticker symbols
+top20_tickers <- c(
+  "AAPL", "NVDA", "MSFT", "AMZN", "META", "AVGO", "TSLA", "COST", "GOOGL", "NFLX",
+  "ADP", "TMUS", "CSCO", "ADBE", "PEP", "AMD", "LIN", "ISRG", "TXN", "INTU"
+)
+
+# Company introduction info
+company_info <- list(
+  "AAPL" = "Apple Inc. designs, manufactures, and markets consumer electronics.",
+  "NVDA" = "NVIDIA Corporation designs GPUs for gaming and professional markets.",
+  "MSFT" = "Microsoft Corporation develops and licenses software and services.",
+  "AMZN" = "Amazon.com, Inc. is an e-commerce and cloud computing company.",
+  "META" = "Meta Platforms, Inc. (Facebook) is a social media and technology company.",
+  "AVGO" = "Broadcom Inc. designs semiconductor and infrastructure software solutions.",
+  "TSLA" = "Tesla, Inc. manufactures and sells electric vehicles and energy solutions.",
+  "COST" = "Costco Wholesale Corporation operates membership-only warehouse clubs.",
+  "GOOGL"= "Alphabet Inc. (Class A) is the parent company of Google.",
+  "NFLX" = "Netflix, Inc. offers subscription-based streaming services.",
+  "ADP" = "Automatic Data Processing, Inc provides HCM and business outsourcing solutions.",
+  "TMUS" = "T-Mobile US, Inc. provides wireless communications services.",
+  "CSCO" = "Cisco Systems, Inc. designs and sells networking equipment.",
+  "ADBE" = "Adobe Inc. offers software for creative and marketing professionals.",
+  "PEP"  = "PepsiCo, Inc. is a global food, snack, and beverage company.",
+  "AMD"  = "Advanced Micro Devices, Inc. designs computer processors.",
+  "LIN"  = "Linde plc is an industrial gas company.",
+  "ISRG" = "Intuitive Surgical, Inc. develops robotic-assisted surgical systems.",
+  "TXN"  = "Texas Instruments Incorporated designs and manufactures semiconductors.",
+  "INTU" = "Intuit Inc. provides financial and tax preparation software."
+)
+
+# Load and filter data after 2020
+load_stock_data <- function(ticker) {
+  filename <- file.path("data", paste0(ticker, ".csv"))
+  if (!file.exists(filename)) {
+    return(NULL)
+  }
+  df <- read_csv(filename,
+                 col_types = cols(
+                   ticker = col_character(),
+                   date = col_date(format = "%Y-%m-%d"),
+                   open = col_double(),
+                   high = col_double(),
+                   low = col_double(),
+                   close = col_double()
+                 ))
+  
+  df <- df %>% 
+    filter(date >= as.Date("2020-01-01"))
+  return(df)
+}
+
+# ARIMA Model
+fit_arima_model <- function(ts_data) {
+  fit <- auto.arima(ts_data)
+  return(fit)
+}
+
+# ETS Model
+fit_ets_model <- function(ts_data) {
+  fit <- ets(ts_data)
+  return(fit)
+}
+
+# Holt-Winters Model
+fit_hw_model <- function(ts_data) {
+  # ts_data should be a time series
+  hw_fit <- HoltWinters(ts_data)
+  return(hw_fit)
+}
+
+# Prophet Model
+fit_prophet_model <- function(df_train) {
+  # df_train should have columns: date, close
+  # Rename for Prophet
+  df_prophet <- df_train %>% rename(ds = date, y = close)
+  m <- prophet(df_prophet)
+  return(m)
+}
+
+# Helper function to prepare train/test and forecast for time series models (ARIMA, ETS, HW)
+# Returns a list with train_ts, df_train, df_test, df_all, last_date
+prepare_data_for_ts <- function(df, train_start, train_end) {
+  df_train <- df %>% filter(date >= train_start & date <= train_end)
+  df_test <- df %>% filter(date > train_end)
+  
+  if(nrow(df_train) < 2) {
+    return(NULL)
+  }
+  
+  # create time series from training data
+  ts_train <- ts(df_train$close, frequency=365)
+  
+  last_date <- max(df$date)
+  
+  list(df_all = df,
+       df_train = df_train,
+       df_test = df_test,
+       ts_train = ts_train,
+       last_date = last_date)
+}
+
+#------------------------------------------------------------
+# UI
+#------------------------------------------------------------
+```{r}
+ui <- dashboardPage(
+  dashboardHeader(title = "Stock Dashboard"),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Page 1: Company Overview", tabName = "page1", icon = icon("line-chart")),
+      menuItem("Page 2: EDA Multiple Companies", tabName = "page2", icon = icon("bar-chart")),
+      menuItem("Page 3: ARIMA/SARIMA Model", tabName = "page3", icon = icon("area-chart")),
+      menuItem("Page 4: ETS Model", tabName = "page4", icon = icon("signal")),
+      menuItem("Page 5: Holt-Winters Model", tabName = "page5", icon = icon("chart-line")),
+      menuItem("Page 6: Prophet Model", tabName = "page6", icon = icon("sun"))
+    )
+  ),
+  dashboardBody(
+    tabItems(
+      # Page 1: Company Overview
+      tabItem(
+        tabName = "page1",
+        fluidRow(
+          box(
+            title = "Select Company",
+            width = 3,
+            selectInput("selected_company_p1", "Company:", choices = top20_tickers, selected = "AAPL")
+          ),
+          box(
+            title = "Company Introduction",
+            width = 9,
+            textOutput("company_intro")
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Stock Price Line Chart",
+            width = 12,
+            plotlyOutput("stock_plot_p1")
+          )
+        )
+      ),
+      
+      # Page 2: EDA
+      tabItem(
+        tabName = "page2",
+        fluidRow(
+          box(
+            title = "Select Companies",
+            width = 12,
+            selectInput("selected_companies_p2", "Companies:", choices = top20_tickers, selected = c("AAPL", "MSFT"), multiple = TRUE)
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Return Summary",
+            width = 12,
+            dataTableOutput("summary_table_p2")
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Closing Price Comparison",
+            width = 12,
+            plotlyOutput("comparison_plot_p2")
+          )
+        )
+      ),
+      
+      # Page 3: ARIMA/SARIMA
+      tabItem(
+        tabName = "page3",
+        fluidRow(
+          box(
+            title = "Select Company and Date Range (ARIMA)",
+            width = 4,
+            selectInput("selected_company_p3", "Company:", choices = top20_tickers, selected = "AAPL"),
+            dateInput("arima_train_start", "Train Start Date:", value = "2020-01-01"),
+            dateInput("arima_train_end", "Train End Date:", value = "2021-12-31")
+          ),
+          box(
+            title = "Forecast Options",
+            width = 4,
+            numericInput("arima_h", "Forecast Horizon (days):", value = 30, min = 1, max = 365),
+            actionButton("fit_arima_btn", "Fit & Forecast ARIMA")
+          ),
+          box(
+            title = "Description",
+            width = 4,
+            "Training data: from arima_train_start to arima_train_end.",
+            "Test data: after arima_train_end to last available date.",
+            "Forecast: beyond last available date by arima_h days."
+          )
+        ),
+        fluidRow(
+          box(
+            title = "ARIMA Forecast Plot",
+            width = 12,
+            plotOutput("arima_plot_p3")
+          )
+        )
+      ),
+      
+      # Page 4: ETS
+      tabItem(
+        tabName = "page4",
+        fluidRow(
+          box(
+            title = "Select Company and Date Range (ETS)",
+            width = 4,
+            selectInput("selected_company_p4", "Company:", choices = top20_tickers, selected = "AAPL"),
+            dateInput("ets_train_start", "Train Start Date:", value = "2020-01-01"),
+            dateInput("ets_train_end", "Train End Date:", value = "2021-12-31")
+          ),
+          box(
+            title = "Forecast Options",
+            width = 4,
+            numericInput("ets_h", "Forecast Horizon (days):", value = 30, min = 1, max = 365),
+            actionButton("fit_ets_btn", "Fit & Forecast ETS")
+          ),
+          box(
+            title = "Description",
+            width = 4,
+            "Training data: from ets_train_start to ets_train_end.",
+            "Test data: after ets_train_end to last available date.",
+            "Forecast: beyond last available date by ets_h days."
+          )
+        ),
+        fluidRow(
+          box(
+            title = "ETS Forecast Plot",
+            width = 12,
+            plotOutput("ets_plot_p4")
+          )
+        )
+      ),
+      
+      # Page 5: Holt-Winters
+      tabItem(
+        tabName = "page5",
+        fluidRow(
+          box(
+            title = "Select Company and Date Range (Holt-Winters)",
+            width = 4,
+            selectInput("selected_company_p5", "Company:", choices = top20_tickers, selected = "AAPL"),
+            dateInput("hw_train_start", "Train Start Date:", value = "2020-01-01"),
+            dateInput("hw_train_end", "Train End Date:", value = "2021-12-31")
+          ),
+          box(
+            title = "Forecast Options",
+            width = 4,
+            numericInput("hw_h", "Forecast Horizon (days):", value = 30, min = 1, max = 365),
+            actionButton("fit_hw_btn", "Fit & Forecast HW")
+          ),
+          box(
+            title = "Description",
+            width = 4,
+            "Training data: from hw_train_start to hw_train_end.",
+            "Test data: after hw_train_end to last available date.",
+            "Forecast: beyond last available date by hw_h days."
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Holt-Winters Forecast Plot",
+            width = 12,
+            plotOutput("hw_plot_p5")
+          )
+        )
+      ),
+      
+      # Page 6: Prophet
+      tabItem(
+        tabName = "page6",
+        fluidRow(
+          box(
+            title = "Select Company and Date Range (Prophet)",
+            width = 4,
+            selectInput("selected_company_p6", "Company:", choices = top20_tickers, selected = "AAPL"),
+            dateInput("prophet_train_start", "Train Start Date:", value = "2020-01-01"),
+            dateInput("prophet_train_end", "Train End Date:", value = "2021-12-31")
+          ),
+          box(
+            title = "Forecast Options",
+            width = 4,
+            numericInput("prophet_h", "Forecast Horizon (days):", value = 30, min = 1, max = 365),
+            actionButton("fit_prophet_btn", "Fit & Forecast Prophet")
+          ),
+          box(
+            title = "Description",
+            width = 4,
+            "Training data: from prophet_train_start to prophet_train_end.",
+            "Test data: after prophet_train_end to last available date.",
+            "Forecast: beyond last available date by prophet_h days."
+          )
+        ),
+        fluidRow(
+          box(
+            title = "Prophet Forecast Plot",
+            width = 12,
+            plotOutput("prophet_plot_p6")
+          )
+        )
+      )
+    )
+  )
+)
+
+#------------------------------------------------------------
+# SERVER
+#------------------------------------------------------------
+server <- function(input, output, session) {
+  
+  # Page 1: Company Overview
+  company_data_p1 <- reactive({
+    req(input$selected_company_p1)
+    load_stock_data(input$selected_company_p1)
+  })
+  
+  output$company_intro <- renderText({
+    req(input$selected_company_p1)
+    company_info[[input$selected_company_p1]]
+  })
+  
+  output$stock_plot_p1 <- renderPlotly({
+    df <- company_data_p1()
+    req(df)
+    p <- ggplot(df, aes(x = date, y = close)) +
+      geom_line() +
+      labs(title = paste(input$selected_company_p1, "Stock Price"), x = "Date", y = "Close Price")
+    ggplotly(p)
+  })
+  
+  # Page 2: EDA
+  eda_data_p2 <- reactive({
+    req(input$selected_companies_p2)
+    df_list <- lapply(input$selected_companies_p2, load_stock_data)
+    names(df_list) <- input$selected_companies_p2
+    df_list <- df_list[!sapply(df_list, is.null)]
+    df_combined <- bind_rows(df_list, .id = "company")
+    df_combined
+  })
+  
+  output$summary_table_p2 <- renderDataTable({
+    df <- eda_data_p2()
+    req(nrow(df) > 0)
+    df <- df %>%
+      group_by(company) %>%
+      arrange(date) %>%
+      mutate(return = close/lag(close)-1) %>%
+      summarise(
+        start_date = min(date),
+        end_date = max(date),
+        mean_return = mean(return, na.rm=TRUE),
+        sd_return = sd(return, na.rm=TRUE)
+      )
+    datatable(df)
+  })
+  
+  output$comparison_plot_p2 <- renderPlotly({
+    df <- eda_data_p2()
+    req(nrow(df)>0)
+    p <- ggplot(df, aes(x = date, y = close, color = company)) +
+      geom_line() +
+      labs(title = "Closing Price Comparison", x = "Date", y = "Close Price")
+    ggplotly(p)
+  })
+  
+  # Page 3: ARIMA
+  arima_data_p3 <- eventReactive(input$fit_arima_btn, {
+    req(input$selected_company_p3)
+    df <- load_stock_data(input$selected_company_p3)
+    req(df)
+    
+    data_info <- prepare_data_for_ts(df, input$arima_train_start, input$arima_train_end)
+    if (is.null(data_info)) {
+      showNotification("Not enough training data for ARIMA.", type="error")
+      return(NULL)
+    }
+    
+    fit <- fit_arima_model(data_info$ts_train)
+    fc <- forecast(fit, h = input$arima_h)
+    
+    list(
+      df_all = data_info$df_all,
+      df_train = data_info$df_train,
+      df_test = data_info$df_test,
+      fc = fc,
+      last_date = data_info$last_date
+    )
+  })
+  
+  output$arima_plot_p3 <- renderPlot({
+    arima_info <- arima_data_p3()
+    req(arima_info)
+    
+    df_train <- arima_info$df_train %>% mutate(type="Train")
+    df_test <- arima_info$df_test %>% mutate(type="Test")
+    future_dates <- seq(arima_info$last_date + 1, by="day", length.out = input$arima_h)
+    forecast_df <- data.frame(date=future_dates, close=as.numeric(arima_info$fc$mean), type="Forecast")
+    
+    combined <- bind_rows(df_train, df_test, forecast_df)
+    
+    ggplot(combined, aes(x=date, y=close, color=type)) +
+      geom_line() +
+      labs(title=paste("ARIMA Forecast for", input$selected_company_p3), x="Date", y="Close Price") +
+      theme_minimal()
+  })
+  
+  # Page 4: ETS
+  ets_data_p4 <- eventReactive(input$fit_ets_btn, {
+    req(input$selected_company_p4)
+    df <- load_stock_data(input$selected_company_p4)
+    req(df)
+    
+    data_info <- prepare_data_for_ts(df, input$ets_train_start, input$ets_train_end)
+    if (is.null(data_info)) {
+      showNotification("Not enough training data for ETS.", type="error")
+      return(NULL)
+    }
+    
+    fit <- fit_ets_model(data_info$ts_train)
+    fc <- forecast(fit, h = input$ets_h)
+    
+    list(
+      df_all = data_info$df_all,
+      df_train = data_info$df_train,
+      df_test = data_info$df_test,
+      fc = fc,
+      last_date = data_info$last_date
+    )
+  })
+  
+  output$ets_plot_p4 <- renderPlot({
+    ets_info <- ets_data_p4()
+    req(ets_info)
+    df_train <- ets_info$df_train %>% mutate(type="Train")
+    df_test <- ets_info$df_test %>% mutate(type="Test")
+    future_dates <- seq(ets_info$last_date + 1, by="day", length.out = input$ets_h)
+    forecast_df <- data.frame(date=future_dates, close=as.numeric(ets_info$fc$mean), type="Forecast")
+    
+    combined <- bind_rows(df_train, df_test, forecast_df)
+    
+    ggplot(combined, aes(x=date, y=close, color=type)) +
+      geom_line() +
+      labs(title=paste("ETS Forecast for", input$selected_company_p4), x="Date", y="Close Price") +
+      theme_minimal()
+  })
+  
+  # Page 5: Holt-Winters
+  hw_data_p5 <- eventReactive(input$fit_hw_btn, {
+    req(input$selected_company_p5)
+    df <- load_stock_data(input$selected_company_p5)
+    req(df)
+    
+    data_info <- prepare_data_for_ts(df, input$hw_train_start, input$hw_train_end)
+    if (is.null(data_info)) {
+      showNotification("Not enough training data for Holt-Winters.", type="error")
+      return(NULL)
+    }
+    
+    fit <- fit_hw_model(data_info$ts_train)
+    fc <- forecast(fit, h = input$hw_h)
+    
+    list(
+      df_all = data_info$df_all,
+      df_train = data_info$df_train,
+      df_test = data_info$df_test,
+      fc = fc,
+      last_date = data_info$last_date
+    )
+  })
+  
+  output$hw_plot_p5 <- renderPlot({
+    hw_info <- hw_data_p5()
+    req(hw_info)
+    df_train <- hw_info$df_train %>% mutate(type="Train")
+    df_test <- hw_info$df_test %>% mutate(type="Test")
+    future_dates <- seq(hw_info$last_date + 1, by="day", length.out = input$hw_h)
+    forecast_df <- data.frame(date=future_dates, close=as.numeric(hw_info$fc$mean), type="Forecast")
+    
+    combined <- bind_rows(df_train, df_test, forecast_df)
+    
+    ggplot(combined, aes(x=date, y=close, color=type)) +
+      geom_line() +
+      labs(title=paste("Holt-Winters Forecast for", input$selected_company_p5), x="Date", y="Close Price") +
+      theme_minimal()
+  })
+  
+  # Page 6: Prophet
+  prophet_data_p6 <- eventReactive(input$fit_prophet_btn, {
+    req(input$selected_company_p6)
+    df <- load_stock_data(input$selected_company_p6)
+    req(df)
+    
+    # Prepare train/test split for Prophet
+    df_train <- df %>% filter(date >= input$prophet_train_start & date <= input$prophet_train_end)
+    df_test <- df %>% filter(date > input$prophet_train_end)
+    
+    if(nrow(df_train) < 2) {
+      showNotification("Not enough training data for Prophet.", type="error")
+      return(NULL)
+    }
+    
+    last_date <- max(df$date)
+    m <- fit_prophet_model(df_train) # Fits Prophet model
+    
+    # Create future dataframe for forecast
+    # forecast horizon beyond last_date
+    future <- make_future_dataframe(m, periods = input$prophet_h)
+    forecast_df_prophet <- predict(m, future)
+    
+    # Extract relevant columns from forecast
+    # We'll match forecasted dates beyond last_date and combine with test
+    forecast_future <- forecast_df_prophet %>% filter(ds > last_date)
+    forecast_future <- forecast_future %>% 
+      select(ds, yhat) %>%
+      rename(date=ds, close=yhat) %>%
+      mutate(type="Forecast")
+    
+    df_train <- df_train %>% mutate(type="Train")
+    df_test <- df_test %>% mutate(type="Test")
+    
+    # Combine all
+    combined <- bind_rows(df_train, df_test, forecast_future)
+    
+    list(
+      combined = combined,
+      last_date = last_date
+    )
+  })
+  
+  output$prophet_plot_p6 <- renderPlot({
+    prophet_info <- prophet_data_p6()
+    req(prophet_info)
+    combined <- prophet_info$combined
+    
+    ggplot(combined, aes(x=date, y=close, color=type)) +
+      geom_line() +
+      labs(title=paste("Prophet Forecast for", input$selected_company_p6), x="Date", y="Close Price") +
+      theme_minimal()
+  })
+  
+}
+
+shinyApp(ui, server)
