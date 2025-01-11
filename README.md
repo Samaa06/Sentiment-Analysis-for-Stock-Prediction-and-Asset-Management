@@ -1,0 +1,1 @@
+Leveraged machine learning, NLP, predictive modeling, and financial risk analytics to develop an analytics dashboard integrating news and social media APIs to predict stock performance and enhance investment strategies. ![image](https://github.com/user-attachments/assets/fdcf7ccb-82c8-4e64-aefb-154f0c140f80)
